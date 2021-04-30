@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 enum TinyDbg_EventType {
     TinyDbg_EVENT_BREAKPOINT,
     TinyDbg_EVENT_STOP
