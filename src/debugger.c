@@ -59,3 +59,25 @@ void TinyDbg_free(TinyDbg *handle) {
     }
     free(handle);
 }
+
+struct user_regs_struct TinyDbg_get_registers(TinyDbg *handle) {
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, handle->pid, 0, &regs);
+    return regs;
+}
+
+void TinyDbg_set_regsisters(TinyDbg *handle, struct user_regs_struct regs) {
+    ptrace(PTRACE_SETREGS, handle->pid, 0, &regs);
+}
+
+int TinyDbg_read_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
+    struct iovec iov_remote = {src, amount};
+    struct iovec iov_local = {dest, amount};
+    return process_vm_readv(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
+}
+
+int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
+    struct iovec iov_local = {src, amount};
+    struct iovec iov_remote = {dest, amount};
+    return process_vm_writev(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
+}
