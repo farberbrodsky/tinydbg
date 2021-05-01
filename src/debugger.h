@@ -12,9 +12,10 @@
 #include "event_queue.h"
 
 typedef struct {
-    pid_t pid;                   // debugged process pid
-    pthread_t waiter_thread;     // this thread is used for waitpid-ing in the background
-    pthread_mutex_t event_lock;  // mutex for using the event_queue
+    pid_t pid;                          // debugged process pid
+    pthread_t waiter_thread;            // this thread is used for waitpid-ing in the background
+    pthread_mutex_t event_lock;         // mutex for using the event_queue
+    pthread_mutex_t process_continued;  // unlocked when the process is continued
     struct TinyDbg_EventQueue event_queue;
 } TinyDbg;
 
@@ -35,4 +36,4 @@ void TinyDbg_set_breakpoint_once(TinyDbg *handle, void *ip);
 // Continue a stopped process, using PTRACE_CONT
 void TinyDbg_continue(TinyDbg *handle);
 // Waits for an event, such as a breakpoint being hit or the process being stopped, and returns it.
-struct TinyDbg_Event TinyDbg_get_event();
+struct TinyDbg_Event *TinyDbg_get_event(TinyDbg *handle);
