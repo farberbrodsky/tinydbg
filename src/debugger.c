@@ -1,7 +1,9 @@
 #include "debugger.h"
+#include <errno.h>
 
 static inline void event_append(TinyDbg *handle, struct TinyDbg_Event *new_event) {
     pthread_mutex_lock(&handle->event_lock);
+    pthread_cond_broadcast(&handle->event_ready);
     if (handle->event_queue.head == NULL) {
         handle->event_queue.head = new_event;
         handle->event_queue.tail = new_event;
@@ -43,6 +45,7 @@ TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const env
         // create object
         TinyDbg *result = malloc(sizeof(TinyDbg));
         pthread_mutex_init(&result->event_lock, NULL);
+        pthread_cond_init(&result->event_ready, NULL);
         pthread_mutex_init(&result->process_continued, NULL);
         pthread_mutex_lock(&result->process_continued);
         result->event_queue.head = NULL;
@@ -59,6 +62,7 @@ void TinyDbg_free(TinyDbg *handle) {
     pthread_mutex_unlock(&handle->process_continued);   // if waiting on the process to continue, don't
     pthread_join(handle->waiter_thread, NULL);          // wait for it to close
     pthread_mutex_destroy(&handle->event_lock);         // destroy the event mutex
+    pthread_cond_destroy(&handle->event_ready);
     pthread_mutex_destroy(&handle->process_continued);  // destroy the process_continued mutex
     // free all events
     struct TinyDbg_Event *event = handle->event_queue.head;
@@ -108,8 +112,7 @@ void TinyDbg_continue(TinyDbg *handle) {
     ptrace(PTRACE_CONT, handle->pid, 0, 0);
 }
 
-struct TinyDbg_Event *TinyDbg_get_event(TinyDbg *handle) {
-    pthread_mutex_lock(&handle->event_lock);
+static struct TinyDbg_Event *TinyDbg_get_event_nowait_nolock(TinyDbg *handle) {
     // pop the first event
     struct TinyDbg_Event *current_head = handle->event_queue.head;
     if (current_head == NULL) {
@@ -124,6 +127,23 @@ struct TinyDbg_Event *TinyDbg_get_event(TinyDbg *handle) {
         handle->event_queue.tail = NULL;
     }
 
-    pthread_mutex_unlock(&handle->event_lock);
     return current_head;
+}
+
+struct TinyDbg_Event *TinyDbg_get_event_nowait(TinyDbg *handle) {
+    pthread_mutex_lock(&handle->event_lock);
+    struct TinyDbg_Event *result = TinyDbg_get_event_nowait_nolock(handle);
+    pthread_mutex_unlock(&handle->event_lock);
+    return result;
+}
+
+struct TinyDbg_Event *TinyDbg_get_event(TinyDbg *handle) {
+    struct TinyDbg_Event *current_result = TinyDbg_get_event_nowait(handle);
+    if (current_result != NULL) return current_result;
+    // have to wait...
+    pthread_mutex_lock(&handle->event_lock);
+    pthread_cond_wait(&handle->event_ready, &handle->event_lock);
+    struct TinyDbg_Event *result = TinyDbg_get_event_nowait_nolock(handle);
+    pthread_mutex_unlock(&handle->event_lock);
+    return result;
 }

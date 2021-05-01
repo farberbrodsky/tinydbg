@@ -15,6 +15,7 @@ typedef struct {
     pid_t pid;                          // debugged process pid
     pthread_t waiter_thread;            // this thread is used for waitpid-ing in the background
     pthread_mutex_t event_lock;         // mutex for using the event_queue
+    pthread_cond_t event_ready;         // broadcast to when there is an event ready to be added
     pthread_mutex_t process_continued;  // unlocked when the process is continued
     struct TinyDbg_EventQueue event_queue;
 } TinyDbg;
@@ -36,5 +37,7 @@ int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount);
 int TinyDbg_set_breakpoint_once(TinyDbg *handle, void *ip);
 // Continue a stopped process, using PTRACE_CONT
 void TinyDbg_continue(TinyDbg *handle);
-// Waits for an event, such as a breakpoint being hit or the process being stopped, and returns it.
+// Get the first event, such as a breakpoint being hit or the process being stopped, and return it (or NULL).
+struct TinyDbg_Event *TinyDbg_get_event_nowait(TinyDbg *handle);
+// Wait for an event, such as a breakpoint being hit or the process being stopped, and return it.
 struct TinyDbg_Event *TinyDbg_get_event(TinyDbg *handle);
