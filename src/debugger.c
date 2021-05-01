@@ -92,6 +92,15 @@ int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount) 
     return process_vm_writev(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
 }
 
+int TinyDbg_set_breakpoint_once(TinyDbg *handle, void *ip) {
+    char original;
+    char int3 = '\x03';
+    if (TinyDbg_read_memory(handle, &original, ip, 1) == -1) return -1;  // read original content
+    if (TinyDbg_write_memory(handle, ip, &int3, 1) == -1) return -2;     // write the int3
+    // TODO write this to a list of breakpoints, so we can know whether it's for one time or not
+    return 0;
+}
+
 void TinyDbg_continue(TinyDbg *handle) {
     // lock process_continued again, worst case scenario you get EDEADLK for already owning it
     pthread_mutex_trylock(&handle->process_continued);
