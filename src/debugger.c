@@ -44,13 +44,19 @@ TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const env
         waitpid(child_pid, NULL, 0);
         // create object
         TinyDbg *result = malloc(sizeof(TinyDbg));
+        result->pid = child_pid;
+        // events
         pthread_mutex_init(&result->event_lock, NULL);
         pthread_cond_init(&result->event_ready, NULL);
         pthread_mutex_init(&result->process_continued, NULL);
         pthread_mutex_lock(&result->process_continued);
         result->event_queue.head = NULL;
         result->event_queue.tail = NULL;
-        result->pid = child_pid;
+        // breakpoints
+        pthread_mutex_init(&result->breakpoint_lock, NULL);
+        result->breakpoints_len = 0;
+        result->breakpoint_positions = malloc(0);
+        result->breakpoints = malloc(0);
         // create waiter thread
         pthread_create(&result->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, result);
         return result;
@@ -58,6 +64,7 @@ TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const env
 }
 
 void TinyDbg_free(TinyDbg *handle) {
+    // events
     pthread_cancel(handle->waiter_thread);              // close waiter thread
     pthread_mutex_unlock(&handle->process_continued);   // if waiting on the process to continue, don't
     pthread_join(handle->waiter_thread, NULL);          // wait for it to close
@@ -71,6 +78,13 @@ void TinyDbg_free(TinyDbg *handle) {
         TinyDbg_Event_free(event);
         event = next;
     }
+    // breakpoints, should be ok to destroy because other threads are already down
+    pthread_mutex_destroy(&handle->breakpoint_lock);
+    handle->breakpoints_len = 0;
+    // NOTE right now breakpoints don't have any malloc'd pointers, but if they do we'd need to free them
+    free(handle->breakpoint_positions);
+    free(handle->breakpoints);
+    // finishing touches
     free(handle);
 }
 
@@ -93,6 +107,7 @@ int TinyDbg_read_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
 int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
     struct iovec iov_local = {src, amount};
     struct iovec iov_remote = {dest, amount};
+    // it currently results with EFAULT, which means it's out of the address space, idk why
     return process_vm_writev(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
 }
 

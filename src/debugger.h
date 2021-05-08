@@ -1,6 +1,9 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#ifndef GUARD_24e5ae45_8058_4b87_9cc3_e06d5681082b
+#define GUARD_24e5ae45_8058_4b87_9cc3_e06d5681082b
+#include <stdint.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdbool.h>
@@ -12,7 +15,17 @@
 #include "event_queue.h"
 
 typedef struct {
+    uintptr_t *position;  // where is the breakpoint
+    bool is_once;         // whether or not to delete this breakpoint immediately after use
+    char original;        // what was there before the breakpoint
+} TinyDbg_Breakpoint;
+
+typedef struct {
     pid_t pid;                          // debugged process pid
+    uintptr_t *breakpoint_positions;    // array of breakpoint positions
+    TinyDbg_Breakpoint *breakpoints;    // array of breakpoint data, with the same indexes, this is for locality (cpu caching)
+    size_t breakpoints_len;             // how many breakpoints are there
+    pthread_mutex_t breakpoint_lock;    // mutex for reading/setting breakpoints
     pthread_t waiter_thread;            // this thread is used for waitpid-ing in the background
     pthread_mutex_t event_lock;         // mutex for using the event_queue
     pthread_cond_t event_ready;         // broadcast to when there is an event ready to be added
@@ -41,3 +54,5 @@ void TinyDbg_continue(TinyDbg *handle);
 struct TinyDbg_Event *TinyDbg_get_event_nowait(TinyDbg *handle);
 // Wait for an event, such as a breakpoint being hit or the process being stopped, and return it.
 struct TinyDbg_Event *TinyDbg_get_event(TinyDbg *handle);
+
+#endif
