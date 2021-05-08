@@ -101,21 +101,37 @@ void TinyDbg_set_regsisters(TinyDbg *handle, struct user_regs_struct regs) {
 int TinyDbg_read_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
     struct iovec iov_remote = {src, amount};
     struct iovec iov_local = {dest, amount};
-    return process_vm_readv(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
+    // return process_vm_readv(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
+    int result = process_vm_readv(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
+    if (result < 0) return result;
+    return 0;
 }
 
+/*
 int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
     struct iovec iov_local = {src, amount};
     struct iovec iov_remote = {dest, amount};
     // it currently results with EFAULT, which means it's out of the address space, idk why
     return process_vm_writev(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
 }
+changed to /proc/pid/mem because it seems to be working when process_vm_writev isn't
+*/
+int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
+    char mem_file_str[31]; // len("/proc/18446744073709551616/mem0") is 31 (64-bit max)
+    sprintf(mem_file_str, "/proc/%d/mem", handle->pid);
+    FILE *mem_file = fopen(mem_file_str, "w");
+    fseek(mem_file, (long)dest, SEEK_SET);
+    int result = fwrite(src, amount, 1, mem_file);
+    if (result < 0) { fclose(mem_file); return result; }
+    fclose(mem_file);
+    return 0;
+}
 
 int TinyDbg_set_breakpoint_once(TinyDbg *handle, void *ip) {
     char original;
     char int3 = '\x03';
-    if (TinyDbg_read_memory(handle, &original, ip, 1) == -1) return -1;  // read original content
-    if (TinyDbg_write_memory(handle, ip, &int3, 1) == -1) return -2;     // write the int3
+    if (TinyDbg_read_memory(handle, &original, ip, 1) != 0) return -1;  // read original content
+    if (TinyDbg_write_memory(handle, ip, &int3, 1) != 0) return -2;     // write the int3
     // TODO write this to a list of breakpoints, so we can know whether it's for one time or not
     return 0;
 }
