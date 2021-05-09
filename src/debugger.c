@@ -21,11 +21,35 @@ static void waitpid_thread(TinyDbg *handle) {
         int wstatus;
         waitpid(my_pid, &wstatus, 0);
         struct TinyDbg_Event *new_event = calloc(1, sizeof(struct TinyDbg_Event));
-        new_event->type = TinyDbg_EVENT_STOP;  // TODO check if it's a breakpoint
-        // create a pointer to wstatus, and put it in the event
-        int *wstatus_ptr = malloc(sizeof(int));
-        *wstatus_ptr = wstatus;
-        new_event->data = wstatus_ptr;
+        bool is_breakpoint = false;
+        if (wstatus == 2943) {
+            // should be a breakpoint, search for the info about it
+            struct user_regs_struct regs = TinyDbg_get_registers(handle);
+            void *ip = (void *)regs.rip;
+            pthread_mutex_lock(&handle->breakpoint_lock);
+            int i = 0;
+            for (; i < handle->breakpoints_len; i++) {
+                printf("Test against %p\n", ip);
+                if (handle->breakpoints[i].position == ip) {
+                    is_breakpoint = true;
+                    break;
+                }
+            }
+            if (is_breakpoint) {
+                new_event->type = TinyDbg_EVENT_BREAKPOINT;
+                void *breakpoint_clone = malloc(sizeof(TinyDbg_Breakpoint));
+                memcpy(breakpoint_clone, &handle->breakpoints[i], sizeof(TinyDbg_Breakpoint));
+                new_event->data = breakpoint_clone;
+            }
+            pthread_mutex_unlock(&handle->breakpoint_lock);
+        }
+        if (!is_breakpoint) {
+            new_event->type = TinyDbg_EVENT_STOP;
+            // create a pointer to wstatus, and put it in the event
+            int *wstatus_ptr = malloc(sizeof(int));
+            *wstatus_ptr = wstatus;
+            new_event->data = wstatus_ptr;
+        }
         // add to the event queue
         event_append(handle, new_event);
     }
@@ -90,7 +114,10 @@ void TinyDbg_free(TinyDbg *handle) {
 
 struct user_regs_struct TinyDbg_get_registers(TinyDbg *handle) {
     struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, handle->pid, 0, &regs);
+    if (ptrace(PTRACE_GETREGS, handle->pid, 0, &regs) == -1) {
+        printf("PANIC!\n");
+        exit(1);
+    }
     return regs;
 }
 
@@ -101,8 +128,9 @@ void TinyDbg_set_regsisters(TinyDbg *handle, struct user_regs_struct regs) {
 int TinyDbg_read_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
     struct iovec iov_remote = {src, amount};
     struct iovec iov_local = {dest, amount};
-    // return process_vm_readv(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
+    pthread_mutex_lock(&handle->breakpoint_lock);
     int result = process_vm_readv(handle->pid, &iov_local, 1, &iov_remote, 1, 0);
+    pthread_mutex_unlock(&handle->breakpoint_lock);
     if (result < 0) return result;
     return 0;
 }
@@ -119,11 +147,13 @@ changed to /proc/pid/mem because it seems to be working when process_vm_writev i
 int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount) {
     char mem_file_str[31]; // len("/proc/18446744073709551616/mem0") is 31 (64-bit max)
     sprintf(mem_file_str, "/proc/%d/mem", handle->pid);
+    pthread_mutex_lock(&handle->breakpoint_lock);
     FILE *mem_file = fopen(mem_file_str, "w");
     fseek(mem_file, (long)dest, SEEK_SET);
     int result = fwrite(src, amount, 1, mem_file);
-    if (result < 0) { fclose(mem_file); return result; }
+    if (result < 0) { fclose(mem_file); pthread_mutex_unlock(&handle->breakpoint_lock); return result; }
     fclose(mem_file);
+    pthread_mutex_unlock(&handle->breakpoint_lock);
     return 0;
 }
 
@@ -132,8 +162,19 @@ int TinyDbg_set_breakpoint_once(TinyDbg *handle, void *ip) {
     char int3 = '\x03';
     if (TinyDbg_read_memory(handle, &original, ip, 1) != 0) return -1;  // read original content
     if (TinyDbg_write_memory(handle, ip, &int3, 1) != 0) return -2;     // write the int3
+    pthread_mutex_lock(&handle->breakpoint_lock);
+    handle->breakpoints_len += 1;
+    handle->breakpoints = realloc(handle->breakpoints, handle->breakpoints_len * sizeof(TinyDbg_Breakpoint));
+    handle->breakpoints[handle->breakpoints_len - 1].is_once = true;
+    handle->breakpoints[handle->breakpoints_len - 1].original = original;
+    handle->breakpoints[handle->breakpoints_len - 1].position = ip;
     // TODO write this to a list of breakpoints, so we can know whether it's for one time or not
+    pthread_mutex_unlock(&handle->breakpoint_lock);
     return 0;
+}
+
+void TinyDbg_Breakpoint_print(TinyDbg_Breakpoint *breakpoint) {
+    printf("Breakpoint(is_once = %d, position = %p)\n", breakpoint->is_once, breakpoint->position);
 }
 
 void TinyDbg_continue(TinyDbg *handle) {

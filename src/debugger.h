@@ -14,6 +14,8 @@
 #include <sys/ptrace.h>
 #include "event_queue.h"
 
+// Breakpoints are stored in pointers.
+// They are freed with free() because they don't store any more pointers
 typedef struct {
     uintptr_t *position;  // where is the breakpoint
     bool is_once;         // whether or not to delete this breakpoint immediately after use
@@ -25,7 +27,7 @@ typedef struct {
     uintptr_t *breakpoint_positions;    // array of breakpoint positions
     TinyDbg_Breakpoint *breakpoints;    // array of breakpoint data, with the same indexes, this is for locality (cpu caching)
     size_t breakpoints_len;             // how many breakpoints are there
-    pthread_mutex_t breakpoint_lock;    // mutex for reading/setting breakpoints
+    pthread_mutex_t breakpoint_lock;    // mutex for reading/setting breakpoints, OR READING/WRITING TO PROCESS MEMORY
     pthread_t waiter_thread;            // this thread is used for waitpid-ing in the background
     pthread_mutex_t event_lock;         // mutex for using the event_queue
     pthread_cond_t event_ready;         // broadcast to when there is an event ready to be added
@@ -48,6 +50,8 @@ int TinyDbg_write_memory(TinyDbg *handle, void *dest, void *src, size_t amount);
 // Set a breakpoint that is only hit once (automatically deleted), returns -1 if couldn't read or -2 if couldn't write.
 // errno is set like in TinyDbg_read_memory and in TinyDbg_write_memory.
 int TinyDbg_set_breakpoint_once(TinyDbg *handle, void *ip);
+// Prints a breakpoint to stdout for, well, debugging
+void TinyDbg_Breakpoint_print(TinyDbg_Breakpoint *breakpoint);
 // Continue a stopped process, using PTRACE_CONT
 void TinyDbg_continue(TinyDbg *handle);
 // Get the first event, such as a breakpoint being hit or the process being stopped, and return it (or NULL).
