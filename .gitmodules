@@ -1,0 +1,3 @@
+[submodule "event_queue_c"]
+	path = event_queue_c
+	url = https://github.com/farberbrodsky/event_queue_c
