@@ -6,9 +6,15 @@ int main(int argc, char *argv[], char *argp[]) {
     TinyDbg *handle = TinyDbg_start("test", argv, argp);
     EventQueue_join(TinyDbg_continue(handle));
 
+    /*
     struct user_regs_struct regs;
     EventQueue_join(TinyDbg_get_registers(handle, &regs));
-    printf("rip is %llu\n", regs.rip);
+    printf("rdx is %llu\n", regs.rdx);
+    regs.rdx++;
+    EventQueue_join(TinyDbg_set_registers(handle, &regs));
+    EventQueue_join(TinyDbg_get_registers(handle, &regs));
+    printf("rdx is %llu\n", regs.rdx);
+    */
     
     EventQueue_Consumer *consumer = EventQueue_new_consumer(handle->eq_debugger_events);
     while (true) {

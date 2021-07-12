@@ -52,6 +52,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
         ptrace(PTRACE_TRACEME, 0, 0, 0);
         execve(filename, argv, envp);
     } else {
+        bool is_stopped = true;
         pthread_mutex_lock(&handle->process_continued);  // process is currently stopped
         handle->pid = child_pid;
         waitpid(child_pid, NULL, 0);
@@ -66,6 +67,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
             if (data->type == TinyDbg_procman_request_type_continue) {
                 // continue
                 ptrace(PTRACE_CONT, handle->pid, 0, 0);
+                is_stopped = false;
                 pthread_mutex_unlock(&handle->process_continued);  // process is currently continued
             } else if (data->type == TinyDbg_procman_request_type_stop) {
                 // send a sigstop
@@ -81,23 +83,31 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     EventQueue_add(handle->eq_debugger_events, dbg_event);
                 } else if (WIFSTOPPED(wstatus)) {
                     // process has stopped
+                    is_stopped = true;
                     pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
                 }
             } else if (data->type == TinyDbg_procman_request_type_get_regs
                     || data->type == TinyDbg_procman_request_type_set_regs
                     || data->type == TinyDbg_procman_request_type_get_mem
                     || data->type == TinyDbg_procman_request_type_set_mem) {  // stuff which needs stopping first
+                
                 pthread_cancel(handle->waiter_thread); pthread_join(handle->waiter_thread, NULL);  // stop the waitpiding
-                pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
-                kill(handle->pid, SIGSTOP);
-                waitpid(handle->pid, NULL, 0);  // wait for it to stop
+                if (!is_stopped) {
+                    pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
+                    kill(handle->pid, SIGSTOP);
+                    waitpid(handle->pid, NULL, 0);  // wait for it to stop
+                }
 
                 if (data->type == TinyDbg_procman_request_type_get_regs) {
                     ptrace(PTRACE_GETREGS, handle->pid, 0, data->content);
+                } else if (data->type == TinyDbg_procman_request_type_set_regs) {
+                    ptrace(PTRACE_SETREGS, handle->pid, 0, data->content);
                 }
 
                 pthread_create(&handle->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, handle);  // restart the waitpiding
-                ptrace(PTRACE_CONT, handle->pid, 0, 0);  // continue it
+                if (!is_stopped) {
+                    ptrace(PTRACE_CONT, handle->pid, 0, 0);  // continue it
+                }
                 // TODO what if this causes a race condition where the process continues before the thread is waitpid-ing?
                 pthread_mutex_unlock(&handle->process_continued);
             }
@@ -168,6 +178,9 @@ EventQueue_JoinHandle *TinyDbg_continue(TinyDbg *handle) {
 }
 EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_struct *save_to) {
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_get_regs, save_to);
+}
+EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_struct *take_from) {
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_regs, take_from);
 }
 
 void TinyDbg_Event_free(TinyDbg_Event *event) {

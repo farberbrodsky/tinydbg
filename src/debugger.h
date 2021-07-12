@@ -89,5 +89,6 @@ void TinyDbg_Event_free(TinyDbg_Event *event);
 EventQueue_JoinHandle *TinyDbg_stop(TinyDbg *handle);
 EventQueue_JoinHandle *TinyDbg_continue(TinyDbg *handle);
 EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_struct *save_to);
+EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_struct *save_to);
 
 #endif
