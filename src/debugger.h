@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <sys/user.h>
 #include <sys/ptrace.h>
 #include "../event_queue_c/event_queue.h"
 
@@ -54,6 +55,7 @@ typedef enum {
     TinyDbg_procman_request_type_set_mem,     // unimplemented
     TinyDbg_procman_request_type_get_breakp,  // unimplemented
     TinyDbg_procman_request_type_set_breakp,  // unimplemented
+    TinyDbg_INTERNAL_procman_request_type_waitpid,
 } TinyDbg_procman_request_type;
 
 typedef struct {
@@ -82,7 +84,10 @@ typedef struct {
     } content;
 } TinyDbg_Event;
 
+void TinyDbg_Event_free(TinyDbg_Event *event);
+
 EventQueue_JoinHandle *TinyDbg_stop(TinyDbg *handle);
 EventQueue_JoinHandle *TinyDbg_continue(TinyDbg *handle);
+EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_struct *save_to);
 
 #endif

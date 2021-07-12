@@ -1,21 +1,35 @@
 #include "debugger.h"
 
+static void unlock_mutex(pthread_mutex_t *mutex) {
+    pthread_mutex_unlock(mutex);
+}
+
+struct waitpid_thread_args {
+    TinyDbg *handle;
+    pthread_cond_t report_to;
+};
 static void waitpid_thread(TinyDbg *handle) {
+    bool first_time = true;
+
     pid_t my_pid = handle->pid;
+    pthread_cleanup_push((void (*)(void *))unlock_mutex, &handle->process_continued);
+
     while (true) {
         pthread_mutex_lock(&handle->process_continued);  // wait for process to be continued, which is when the lock is unlocked
+
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);  // only cancel when waitpiding
         int wstatus;
         waitpid(my_pid, &wstatus, 0);
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-        if (WIFEXITED(wstatus)) {
-            // debugged program is done
-            TinyDbg_Event *event = malloc(sizeof(TinyDbg_Event));
-            event->type = TinyDbg_event_type_exit;
-            event->content.stop_code = WEXITSTATUS(wstatus);
-            EventQueue_add(handle->eq_debugger_events, event);
-        }
-        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+
+        pthread_mutex_unlock(&handle->process_continued);
+        TinyDbg_procman_request *event = malloc(sizeof(TinyDbg_procman_request));
+        event->type = TinyDbg_INTERNAL_procman_request_type_waitpid;
+        event->content = (void *)(size_t)wstatus;
+        EventQueue_join(EventQueue_add_joinable(handle->eq_process_manager, event));  // let the manager lock now
     }
+
+    pthread_cleanup_pop(0);
 }
 
 struct process_manager_thread_args {
@@ -53,10 +67,39 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                 // continue
                 ptrace(PTRACE_CONT, handle->pid, 0, 0);
                 pthread_mutex_unlock(&handle->process_continued);  // process is currently continued
-            }
-            if (data->type == TinyDbg_procman_request_type_stop) {
+            } else if (data->type == TinyDbg_procman_request_type_stop) {
                 // send a sigstop
                 kill(handle->pid, SIGSTOP);
+            } else if (data->type == TinyDbg_INTERNAL_procman_request_type_waitpid) {
+                // got a stop code
+                int wstatus = (int)(size_t)data->content;
+                if (WIFEXITED(wstatus)) {
+                    // process is done
+                    TinyDbg_Event *dbg_event = malloc(sizeof(TinyDbg_Event));
+                    dbg_event->type = TinyDbg_event_type_exit;
+                    dbg_event->content.stop_code = WEXITSTATUS(wstatus);
+                    EventQueue_add(handle->eq_debugger_events, dbg_event);
+                } else if (WIFSTOPPED(wstatus)) {
+                    // process has stopped
+                    pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
+                }
+            } else if (data->type == TinyDbg_procman_request_type_get_regs
+                    || data->type == TinyDbg_procman_request_type_set_regs
+                    || data->type == TinyDbg_procman_request_type_get_mem
+                    || data->type == TinyDbg_procman_request_type_set_mem) {  // stuff which needs stopping first
+                pthread_cancel(handle->waiter_thread); pthread_join(handle->waiter_thread, NULL);  // stop the waitpiding
+                pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
+                kill(handle->pid, SIGSTOP);
+                waitpid(handle->pid, NULL, 0);  // wait for it to stop
+
+                if (data->type == TinyDbg_procman_request_type_get_regs) {
+                    ptrace(PTRACE_GETREGS, handle->pid, 0, data->content);
+                }
+
+                pthread_create(&handle->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, handle);  // restart the waitpiding
+                ptrace(PTRACE_CONT, handle->pid, 0, 0);  // continue it
+                // TODO what if this causes a race condition where the process continues before the thread is waitpid-ing?
+                pthread_mutex_unlock(&handle->process_continued);
             }
 
             free(data);
@@ -97,25 +140,36 @@ void TinyDbg_free(TinyDbg *handle) {
     // TODO free all breakpoints
     free(handle->breakpoints);
 
-    pthread_mutex_destroy(&handle->process_continued);
-    EventQueue_free(handle->eq_process_manager);
-    EventQueue_free(handle->eq_debugger_events);
-
     pthread_cancel(handle->waiter_thread);
-    pthread_cancel(handle->process_manager_thread);
+    pthread_join(handle->waiter_thread, NULL);
+
+    EventQueue_free(handle->eq_debugger_events);
+    EventQueue_free(handle->eq_process_manager);
+
+    pthread_join(handle->process_manager_thread, NULL);
+    pthread_mutex_destroy(&handle->process_continued);
+
     free(handle);
 }
 
-static EventQueue_JoinHandle *TinyDbg_send_empty_procman_request(TinyDbg *handle, TinyDbg_procman_request_type type) {
+static EventQueue_JoinHandle *TinyDbg_send_procman_request(TinyDbg *handle, TinyDbg_procman_request_type type, void *content) {
     TinyDbg_procman_request *data = calloc(1, sizeof(TinyDbg_procman_request));
     data->type = type;
+    data->content = content;
     return EventQueue_add_joinable(handle->eq_process_manager, data);
 }
 
 // Wrappers for the previous function
 EventQueue_JoinHandle *TinyDbg_stop(TinyDbg *handle) {
-    return TinyDbg_send_empty_procman_request(handle, TinyDbg_procman_request_type_stop);
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_stop, NULL);
 }
 EventQueue_JoinHandle *TinyDbg_continue(TinyDbg *handle) {
-    return TinyDbg_send_empty_procman_request(handle, TinyDbg_procman_request_type_continue);
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_continue, NULL);
+}
+EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_struct *save_to) {
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_get_regs, save_to);
+}
+
+void TinyDbg_Event_free(TinyDbg_Event *event) {
+    free(event);
 }
