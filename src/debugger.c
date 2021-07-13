@@ -102,6 +102,14 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     ptrace(PTRACE_GETREGS, handle->pid, 0, data->content);
                 } else if (data->type == TinyDbg_procman_request_type_set_regs) {
                     ptrace(PTRACE_SETREGS, handle->pid, 0, data->content);
+                } else if (data->type == TinyDbg_procman_request_type_get_mem) {
+                    TinyDbg_procman_request_get_mem *x = data->content;
+                    process_vm_readv(handle->pid, &x->local_iov, 1, &x->remote_iov, 1, 0);
+                    free(x);
+                } else if (data->type == TinyDbg_procman_request_type_set_mem) {
+                    TinyDbg_procman_request_set_mem *x = data->content;
+                    process_vm_writev(handle->pid, &x->local_iov, 1, &x->remote_iov, 1, 0);
+                    free(x);
                 }
 
                 pthread_create(&handle->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, handle);  // restart the waitpiding
@@ -181,6 +189,18 @@ EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_s
 }
 EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_struct *take_from) {
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_regs, take_from);
+}
+EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov) {
+    TinyDbg_procman_request_get_mem *x = malloc(sizeof(TinyDbg_procman_request_get_mem));
+    x->local_iov = local_iov;
+    x->remote_iov = remote_iov;
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_get_mem, x);
+}
+EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov) {
+    TinyDbg_procman_request_set_mem *x = malloc(sizeof(TinyDbg_procman_request_get_mem));
+    x->local_iov = local_iov;
+    x->remote_iov = remote_iov;
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_mem, x);
 }
 
 void TinyDbg_Event_free(TinyDbg_Event *event) {
