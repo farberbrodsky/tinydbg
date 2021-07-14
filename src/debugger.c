@@ -1,13 +1,10 @@
 #include "debugger.h"
+#include <arpa/inet.h>
 
 static void unlock_mutex(pthread_mutex_t *mutex) {
     pthread_mutex_unlock(mutex);
 }
 
-struct waitpid_thread_args {
-    TinyDbg *handle;
-    pthread_cond_t report_to;
-};
 static void waitpid_thread(TinyDbg *handle) {
     bool first_time = true;
 
@@ -15,9 +12,9 @@ static void waitpid_thread(TinyDbg *handle) {
     pthread_cleanup_push((void (*)(void *))unlock_mutex, &handle->process_continued);
 
     while (true) {
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);  // only cancel when waitpiding
         pthread_mutex_lock(&handle->process_continued);  // wait for process to be continued, which is when the lock is unlocked
 
-        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);  // only cancel when waitpiding
         int wstatus;
         waitpid(my_pid, &wstatus, 0);
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
@@ -71,6 +68,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                 pthread_mutex_unlock(&handle->process_continued);  // process is currently continued
             } else if (data->type == TinyDbg_procman_request_type_stop) {
                 // send a sigstop
+                is_stopped = true;
                 kill(handle->pid, SIGSTOP);
             } else if (data->type == TinyDbg_INTERNAL_procman_request_type_waitpid) {
                 // got a stop code
@@ -85,14 +83,44 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     // process has stopped
                     is_stopped = true;
                     pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
+                    // TODO check whether this was a breakpoint
+
+                    struct user_regs_struct regs;
+                    ptrace(PTRACE_GETREGS, handle->pid, 0, &regs);
+
+                    pthread_mutex_lock(&handle->breakpoint_lock);
+                    bool found_breakpoint = false;
+                    TinyDbg_Breakpoint breakpoint;
+                    for (size_t i = 0; i < handle->breakpoints_len; i++) {
+                        printf("Breakpoint position is %lu\n", handle->breakpoint_positions[i]);
+                        printf("RIP is %llu\n", regs.rip);
+                        if (handle->breakpoint_positions[i] == regs.rip) {
+                            // found!
+                            found_breakpoint = true;
+                            breakpoint = handle->breakpoints[i];
+                            break;
+                        }
+                    }
+                    pthread_mutex_unlock(&handle->breakpoint_lock);
+
+                    if (found_breakpoint) {
+                        // we stopped on a breakpoint!!!
+                        puts("OMG WE BREAKPOINTED!!!\n");
+                    }
+
+                    TinyDbg_Event *dbg_event = malloc(sizeof(TinyDbg_Event));
+                    dbg_event->type = TinyDbg_event_type_stop;
+                    dbg_event->content.stop_code = WSTOPSIG(wstatus);
+                    EventQueue_add(handle->eq_debugger_events, dbg_event);
                 }
             } else if (data->type == TinyDbg_procman_request_type_get_regs
                     || data->type == TinyDbg_procman_request_type_set_regs
                     || data->type == TinyDbg_procman_request_type_get_mem
-                    || data->type == TinyDbg_procman_request_type_set_mem) {  // stuff which needs stopping first
+                    || data->type == TinyDbg_procman_request_type_set_mem
+                    || data->type == TinyDbg_procman_request_type_set_breakp) {  // stuff which needs stopping first
                 
-                pthread_cancel(handle->waiter_thread); pthread_join(handle->waiter_thread, NULL);  // stop the waitpiding
                 if (!is_stopped) {
+                    pthread_cancel(handle->waiter_thread); pthread_join(handle->waiter_thread, NULL);  // stop the waitpiding
                     pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
                     kill(handle->pid, SIGSTOP);
                     waitpid(handle->pid, NULL, 0);  // wait for it to stop
@@ -110,10 +138,34 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     TinyDbg_procman_request_set_mem *x = data->content;
                     process_vm_writev(handle->pid, &x->local_iov, 1, &x->remote_iov, 1, 0);
                     free(x);
+                } else if (data->type == TinyDbg_procman_request_type_set_breakp) {
+                    // set a breakpoint!
+                    TinyDbg_procman_request_set_breakp *x = data->content;
+                    TinyDbg_Breakpoint my_breakpoint;
+                    my_breakpoint.is_once = x->is_once;
+
+                    uint32_t data_at_position = htonl(ptrace(PTRACE_PEEKTEXT, handle->pid, x->position, NULL));  // convert to big endian
+                    my_breakpoint.original = ((char *)(&data_at_position))[0];  // the first byte in the big endian is the original
+                    ((char *)(&data_at_position))[0] = '\xcc';
+                    ptrace(PTRACE_POKETEXT, handle->pid, x->position, ntohl(data_at_position));  // write this with the \xcc in there
+                    data_at_position = ptrace(PTRACE_PEEKTEXT, handle->pid, x->position, NULL);
+
+                    // write this breakpoint
+                    pthread_mutex_lock(&handle->breakpoint_lock);
+                    handle->breakpoints_len++;
+
+                    handle->breakpoint_positions = realloc(handle->breakpoint_positions, sizeof(uintptr_t) * handle->breakpoints_len);
+                    handle->breakpoint_positions[handle->breakpoints_len - 1] = x->position;
+
+                    handle->breakpoints = realloc(handle->breakpoints, sizeof(TinyDbg_Breakpoint) * handle->breakpoints_len);
+                    handle->breakpoints[handle->breakpoints_len - 1] = my_breakpoint;
+
+                    pthread_mutex_unlock(&handle->breakpoint_lock);
+                    free(x);
                 }
 
-                pthread_create(&handle->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, handle);  // restart the waitpiding
                 if (!is_stopped) {
+                    pthread_create(&handle->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, handle);  // restart the waitpiding
                     ptrace(PTRACE_CONT, handle->pid, 0, 0);  // continue it
                 }
                 // TODO what if this causes a race condition where the process continues before the thread is waitpid-ing?
@@ -132,6 +184,7 @@ TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const env
     result->breakpoint_positions = malloc(0);
     result->breakpoints = malloc(0);
     result->breakpoints_len = 0;
+    pthread_mutex_init(&result->breakpoint_lock, NULL);
 
     pthread_mutex_init(&result->process_continued, NULL);
     result->eq_process_manager = EventQueue_new();
@@ -155,8 +208,8 @@ TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const env
 
 void TinyDbg_free(TinyDbg *handle) {
     free(handle->breakpoint_positions);
-    // TODO free all breakpoints
     free(handle->breakpoints);
+    pthread_mutex_destroy(&handle->breakpoint_lock);
 
     pthread_cancel(handle->waiter_thread);
     pthread_join(handle->waiter_thread, NULL);
@@ -201,6 +254,13 @@ EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_io
     x->local_iov = local_iov;
     x->remote_iov = remote_iov;
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_mem, x);
+}
+
+EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t position, bool is_once) {
+    TinyDbg_procman_request_set_breakp *x = malloc(sizeof(TinyDbg_procman_request_set_breakp));
+    x->position = position;
+    x->is_once = is_once;
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_breakp, x);
 }
 
 void TinyDbg_Event_free(TinyDbg_Event *event) {

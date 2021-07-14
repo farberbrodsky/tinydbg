@@ -18,7 +18,7 @@
 // Breakpoints are stored in pointers.
 // They are freed with free() because they don't store any more pointers
 typedef struct {
-    uintptr_t *position;  // where is the breakpoint
+    uintptr_t position;   // where is the breakpoint
     bool is_once;         // whether or not to delete this breakpoint immediately after use
     char original;        // what was there before the breakpoint
 } TinyDbg_Breakpoint;
@@ -29,6 +29,7 @@ typedef struct {
     uintptr_t *breakpoint_positions;    // array of breakpoint positions
     TinyDbg_Breakpoint *breakpoints;    // array of breakpoint data, with the same indexes, this is for locality (cpu caching)
     size_t breakpoints_len;             // how many breakpoints are there
+    pthread_mutex_t breakpoint_lock;    // accessing breakpoints may not require reading memory from the process - so you don't have to wait for the process manager
 
     pthread_t waiter_thread;            // this thread is used for waitpid-ing in the background
     pthread_t process_manager_thread;   // this thread manages the process - ptraces and reads/writes to memory
@@ -53,7 +54,6 @@ typedef enum {
     TinyDbg_procman_request_type_set_regs,    // unimplemented, content should be a pointer to struct user_regs_struct
     TinyDbg_procman_request_type_get_mem,     // unimplemented
     TinyDbg_procman_request_type_set_mem,     // unimplemented
-    TinyDbg_procman_request_type_get_breakp,  // unimplemented
     TinyDbg_procman_request_type_set_breakp,  // unimplemented
     TinyDbg_INTERNAL_procman_request_type_waitpid,
 } TinyDbg_procman_request_type;
@@ -65,12 +65,18 @@ typedef struct {
 typedef TinyDbg_procman_request_get_mem TinyDbg_procman_request_set_mem;
 
 typedef struct {
+    uintptr_t position;
+    bool is_once;
+} TinyDbg_procman_request_set_breakp;
+
+typedef struct {
     TinyDbg_procman_request_type type;
     void *content;
 } TinyDbg_procman_request;
 
 typedef enum {
     TinyDbg_event_type_exit,
+    TinyDbg_event_type_stop,
 } TinyDbg_Event_type;
 
 typedef struct {
@@ -88,5 +94,6 @@ EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_s
 EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_struct *save_to);
 EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
 EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
+EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t position, bool is_once);
 
 #endif

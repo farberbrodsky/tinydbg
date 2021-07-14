@@ -5,7 +5,7 @@ int main() {
         // asm("int $3");
         printf("hello\n");
         if (i != 4) {
-            sleep(1);
+            sleep(2);
         }
     }
     return 3;
