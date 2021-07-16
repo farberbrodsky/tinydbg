@@ -62,14 +62,10 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
             TinyDbg_procman_request *data;
             if (EventQueue_consume(consumer, (void **)(&data)) == 'K') return EventQueue_destroy_consumer(consumer);
             if (data->type == TinyDbg_procman_request_type_continue) {
-                // continue
+                // check wheter this was at a breakpoint, if so delete it
                 ptrace(PTRACE_CONT, handle->pid, 0, 0);
                 is_stopped = false;
                 pthread_mutex_unlock(&handle->process_continued);  // process is currently continued
-            } else if (data->type == TinyDbg_procman_request_type_stop) {
-                // send a sigstop
-                is_stopped = true;
-                kill(handle->pid, SIGSTOP);
             } else if (data->type == TinyDbg_INTERNAL_procman_request_type_waitpid) {
                 // got a stop code
                 int wstatus = (int)(size_t)data->content;
@@ -83,41 +79,60 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     // process has stopped
                     is_stopped = true;
                     pthread_mutex_lock(&handle->process_continued);  // process is currently supposed to be stopped
-                    // TODO check whether this was a breakpoint
 
+                    // check whether this was a breakpoint
                     struct user_regs_struct regs;
                     ptrace(PTRACE_GETREGS, handle->pid, 0, &regs);
+                    regs.rip--;
 
                     pthread_mutex_lock(&handle->breakpoint_lock);
                     bool found_breakpoint = false;
                     TinyDbg_Breakpoint breakpoint;
                     for (size_t i = 0; i < handle->breakpoints_len; i++) {
-                        printf("Breakpoint position is %lu\n", handle->breakpoint_positions[i]);
-                        printf("RIP is %llu\n", regs.rip);
                         if (handle->breakpoint_positions[i] == regs.rip) {
                             // found!
                             found_breakpoint = true;
                             breakpoint = handle->breakpoints[i];
+                            // if the breakpoint is set to be once, delete it from the list
+                            if (breakpoint.is_once) {
+                                for (int j = i; j < handle->breakpoints_len - 1; j++) {
+                                    handle->breakpoint_positions[j] = handle->breakpoint_positions[j + 1];
+                                }
+                                for (int j = i; j < handle->breakpoints_len - 1; j++) {
+                                    handle->breakpoints[j] = handle->breakpoints[j + 1];
+                                }
+                                handle->breakpoints_len--;
+                            }
                             break;
                         }
                     }
                     pthread_mutex_unlock(&handle->breakpoint_lock);
 
+                    TinyDbg_Event *dbg_event = malloc(sizeof(TinyDbg_Event));
                     if (found_breakpoint) {
                         // we stopped on a breakpoint!!!
-                        puts("OMG WE BREAKPOINTED!!!\n");
+                        dbg_event->type = TinyDbg_event_type_breakpoint;
+                        dbg_event->content.breakpoint = breakpoint;
+                        EventQueue_add(handle->eq_debugger_events, dbg_event);
+                        // change the rip so it's just before the breakpoint
+                        ptrace(PTRACE_SETREGS, handle->pid, 0, &regs);
+                        // revert the first instruction
+                        unsigned long mem = ptrace(PTRACE_PEEKTEXT, handle->pid, regs.rip, NULL);
+                        ((char *)(&mem))[0] = breakpoint.original;
+                        ptrace(PTRACE_POKETEXT, handle->pid, regs.rip, mem);
+                    } else {
+                        dbg_event->type = TinyDbg_event_type_stop;
+                        dbg_event->content.stop_code = WSTOPSIG(wstatus);
+                        EventQueue_add(handle->eq_debugger_events, dbg_event);
                     }
-
-                    TinyDbg_Event *dbg_event = malloc(sizeof(TinyDbg_Event));
-                    dbg_event->type = TinyDbg_event_type_stop;
-                    dbg_event->content.stop_code = WSTOPSIG(wstatus);
-                    EventQueue_add(handle->eq_debugger_events, dbg_event);
                 }
-            } else if (data->type == TinyDbg_procman_request_type_get_regs
+            } else if (data->type == TinyDbg_procman_request_type_stop
+                    || data->type == TinyDbg_procman_request_type_get_regs
                     || data->type == TinyDbg_procman_request_type_set_regs
                     || data->type == TinyDbg_procman_request_type_get_mem
                     || data->type == TinyDbg_procman_request_type_set_mem
-                    || data->type == TinyDbg_procman_request_type_set_breakp) {  // stuff which needs stopping first
+                    || data->type == TinyDbg_procman_request_type_set_breakp
+                    || data->type == TinyDbg_procman_request_type_singlestep) {  // stuff which needs stopping first
                 
                 if (!is_stopped) {
                     pthread_cancel(handle->waiter_thread); pthread_join(handle->waiter_thread, NULL);  // stop the waitpiding
@@ -144,11 +159,10 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     TinyDbg_Breakpoint my_breakpoint;
                     my_breakpoint.is_once = x->is_once;
 
-                    uint32_t data_at_position = htonl(ptrace(PTRACE_PEEKTEXT, handle->pid, x->position, NULL));  // convert to big endian
-                    my_breakpoint.original = ((char *)(&data_at_position))[0];  // the first byte in the big endian is the original
+                    unsigned long data_at_position = ptrace(PTRACE_PEEKTEXT, handle->pid, x->position, NULL);
+                    my_breakpoint.original = ((char *)(&data_at_position))[0];
                     ((char *)(&data_at_position))[0] = '\xcc';
-                    ptrace(PTRACE_POKETEXT, handle->pid, x->position, ntohl(data_at_position));  // write this with the \xcc in there
-                    data_at_position = ptrace(PTRACE_PEEKTEXT, handle->pid, x->position, NULL);
+                    ptrace(PTRACE_POKETEXT, handle->pid, x->position, data_at_position);  // write this with the \xcc in there
 
                     // write this breakpoint
                     pthread_mutex_lock(&handle->breakpoint_lock);
@@ -162,11 +176,18 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
 
                     pthread_mutex_unlock(&handle->breakpoint_lock);
                     free(x);
+                } else if (data->type == TinyDbg_procman_request_type_singlestep) {
+                    ptrace(PTRACE_SINGLESTEP, handle->pid, NULL, NULL);
+                    waitpid(handle->pid, NULL, 0);
                 }
 
                 if (!is_stopped) {
                     pthread_create(&handle->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, handle);  // restart the waitpiding
-                    ptrace(PTRACE_CONT, handle->pid, 0, 0);  // continue it
+                    if (data->type != TinyDbg_procman_request_type_stop) {
+                        ptrace(PTRACE_CONT, handle->pid, 0, 0);
+                    } else {
+                        is_stopped = true;
+                    }
                 }
                 // TODO what if this causes a race condition where the process continues before the thread is waitpid-ing?
                 pthread_mutex_unlock(&handle->process_continued);
@@ -236,6 +257,9 @@ EventQueue_JoinHandle *TinyDbg_stop(TinyDbg *handle) {
 }
 EventQueue_JoinHandle *TinyDbg_continue(TinyDbg *handle) {
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_continue, NULL);
+}
+EventQueue_JoinHandle *TinyDbg_singlestep(TinyDbg *handle) {
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_singlestep, NULL);
 }
 EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_struct *save_to) {
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_get_regs, save_to);

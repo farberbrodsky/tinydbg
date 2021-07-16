@@ -48,13 +48,14 @@ void TinyDbg_free(TinyDbg *handle);
 
 // TODO define the event structs and the union and enum for them
 typedef enum {
-    TinyDbg_procman_request_type_stop,        // no content
-    TinyDbg_procman_request_type_continue,    // no content
-    TinyDbg_procman_request_type_get_regs,    // unimplemented, content should be a pointer to struct user_regs_struct
-    TinyDbg_procman_request_type_set_regs,    // unimplemented, content should be a pointer to struct user_regs_struct
-    TinyDbg_procman_request_type_get_mem,     // unimplemented
-    TinyDbg_procman_request_type_set_mem,     // unimplemented
-    TinyDbg_procman_request_type_set_breakp,  // unimplemented
+    TinyDbg_procman_request_type_stop,
+    TinyDbg_procman_request_type_continue,
+    TinyDbg_procman_request_type_singlestep,
+    TinyDbg_procman_request_type_get_regs,
+    TinyDbg_procman_request_type_set_regs,
+    TinyDbg_procman_request_type_get_mem,
+    TinyDbg_procman_request_type_set_mem,
+    TinyDbg_procman_request_type_set_breakp,
     TinyDbg_INTERNAL_procman_request_type_waitpid,
 } TinyDbg_procman_request_type;
 
@@ -77,12 +78,14 @@ typedef struct {
 typedef enum {
     TinyDbg_event_type_exit,
     TinyDbg_event_type_stop,
+    TinyDbg_event_type_breakpoint,
 } TinyDbg_Event_type;
 
 typedef struct {
     TinyDbg_Event_type type;
     union TinyDbg_Event_content {
         int stop_code;
+        TinyDbg_Breakpoint breakpoint;
     } content;
 } TinyDbg_Event;
 
@@ -90,6 +93,7 @@ void TinyDbg_Event_free(TinyDbg_Event *event);
 
 EventQueue_JoinHandle *TinyDbg_stop(TinyDbg *handle);
 EventQueue_JoinHandle *TinyDbg_continue(TinyDbg *handle);
+EventQueue_JoinHandle *TinyDbg_singlestep(TinyDbg *handle);
 EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_struct *save_to);
 EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_struct *save_to);
 EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);

@@ -9,23 +9,13 @@ int main(int argc, char *argv[], char *argp[]) {
     EventQueue_join(TinyDbg_continue(handle));
 
     sleep(1);
-    EventQueue_join(TinyDbg_stop(handle));
     struct user_regs_struct regs;
     EventQueue_join(TinyDbg_get_registers(handle, &regs));
     printf("rip is %llu\n", regs.rip);
 
-    unsigned char buf[64];
-    struct iovec local;
-    struct iovec remote;
-    local.iov_base = buf;
-    local.iov_len = 64;
-    remote.iov_base = (void *)regs.rip;
-    remote.iov_len = 64;
-    EventQueue_join(TinyDbg_get_memory(handle, local, remote));
-    // write(2, buf, 64);
-    // puts("\n");
-    // EventQueue_join(TinyDbg_set_breakpoint(handle, regs.rip, true));
-    EventQueue_join(TinyDbg_continue(handle));
+    sleep(1);
+    puts("Breakpoint: deployed!\n");
+    EventQueue_join(TinyDbg_set_breakpoint(handle, regs.rip, true));
     
     EventQueue_Consumer *consumer = EventQueue_new_consumer(handle->eq_debugger_events);
     while (true) {
@@ -36,6 +26,10 @@ int main(int argc, char *argv[], char *argp[]) {
             break;
         } else if (event->type == TinyDbg_event_type_stop) {
             printf("Stopped!!! Code %d\n", event->content.stop_code);
+            EventQueue_join(TinyDbg_continue(handle));
+        } else if (event->type == TinyDbg_event_type_breakpoint) {
+            printf("Breaked!!!!\n");
+            EventQueue_join(TinyDbg_continue(handle));
         } else {
             printf("Wtf! I don't know what this is.\n");
         }
