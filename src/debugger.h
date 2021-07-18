@@ -56,6 +56,8 @@ typedef enum {
     TinyDbg_procman_request_type_get_mem,
     TinyDbg_procman_request_type_set_mem,
     TinyDbg_procman_request_type_set_breakp,
+    TinyDbg_procman_request_type_stop_on_syscall,
+    TinyDbg_procman_request_type_no_stop_on_syscall,
     TinyDbg_INTERNAL_procman_request_type_waitpid,
 } TinyDbg_procman_request_type;
 
@@ -78,6 +80,7 @@ typedef struct {
 typedef enum {
     TinyDbg_event_type_exit,
     TinyDbg_event_type_stop,
+    TinyDbg_event_type_syscall,
     TinyDbg_event_type_breakpoint,
 } TinyDbg_Event_type;
 
@@ -85,6 +88,7 @@ typedef struct {
     TinyDbg_Event_type type;
     union TinyDbg_Event_content {
         int stop_code;
+        int syscall_id;
         TinyDbg_Breakpoint breakpoint;
     } content;
 } TinyDbg_Event;
@@ -99,6 +103,9 @@ EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_s
 EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
 EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
 EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t position, bool is_once);
+
+EventQueue_JoinHandle *TinyDbg_stop_on_syscall(TinyDbg *handle);
+EventQueue_JoinHandle *TinyDbg_no_stop_on_syscall(TinyDbg *handle);
 
 TinyDbg_Breakpoint *TinyDbg_list_breakpoints(TinyDbg *handle, size_t *breakpoints_len);
 

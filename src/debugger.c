@@ -50,6 +50,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
         execve(filename, argv, envp);
     } else {
         bool is_stopped = true;
+        bool syscall_stop = false;
         pthread_mutex_lock(&handle->process_continued);  // process is currently stopped
         handle->pid = child_pid;
         waitpid(child_pid, NULL, 0);
@@ -63,7 +64,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
             if (EventQueue_consume(consumer, (void **)(&data)) == 'K') return EventQueue_destroy_consumer(consumer);
             if (data->type == TinyDbg_procman_request_type_continue) {
                 // check wheter this was at a breakpoint, if so delete it
-                ptrace(PTRACE_CONT, handle->pid, 0, 0);
+                ptrace(syscall_stop ? PTRACE_SYSCALL : PTRACE_CONT, handle->pid, 0, 0);
                 is_stopped = false;
                 pthread_mutex_unlock(&handle->process_continued);  // process is currently continued
             } else if (data->type == TinyDbg_INTERNAL_procman_request_type_waitpid) {
@@ -129,9 +130,19 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                             // TODO what if the instruction that was there caused a different stop code?
                         }
                     } else {
-                        dbg_event->type = TinyDbg_event_type_stop;
-                        dbg_event->content.stop_code = WSTOPSIG(wstatus);
-                        EventQueue_add(handle->eq_debugger_events, dbg_event);
+                        unsigned long mem = ptrace(PTRACE_PEEKTEXT, handle->pid, regs.rip - 1, NULL);  // look 2 bytes back
+                        // check for a syscall
+                        if (syscall_stop && WSTOPSIG(wstatus) == SIGTRAP && ((char *)(&mem))[0] == '\x0f' && ((char *)(&mem))[1] == '\x05') {
+                            // syscall!
+                            dbg_event->type = TinyDbg_event_type_syscall;
+                            dbg_event->content.syscall_id = regs.orig_rax;
+                            EventQueue_add(handle->eq_debugger_events, dbg_event);
+                        } else {
+                            // not a syscall
+                            dbg_event->type = TinyDbg_event_type_stop;
+                            dbg_event->content.stop_code = WSTOPSIG(wstatus);
+                            EventQueue_add(handle->eq_debugger_events, dbg_event);
+                        }
                     }
                 }
             } else if (data->type == TinyDbg_procman_request_type_stop
@@ -140,7 +151,9 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     || data->type == TinyDbg_procman_request_type_get_mem
                     || data->type == TinyDbg_procman_request_type_set_mem
                     || data->type == TinyDbg_procman_request_type_set_breakp
-                    || data->type == TinyDbg_procman_request_type_singlestep) {  // stuff which needs stopping first
+                    || data->type == TinyDbg_procman_request_type_singlestep
+                    || data->type == TinyDbg_procman_request_type_stop_on_syscall
+                    || data->type == TinyDbg_procman_request_type_no_stop_on_syscall) {  // stuff which needs stopping first
                 
                 if (!is_stopped) {
                     pthread_cancel(handle->waiter_thread); pthread_join(handle->waiter_thread, NULL);  // stop the waitpiding
@@ -188,12 +201,16 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                 } else if (data->type == TinyDbg_procman_request_type_singlestep) {
                     ptrace(PTRACE_SINGLESTEP, handle->pid, NULL, NULL);
                     waitpid(handle->pid, NULL, 0);
+                } else if (data->type == TinyDbg_procman_request_type_stop_on_syscall) {
+                    syscall_stop = true;
+                } else if (data->type == TinyDbg_procman_request_type_no_stop_on_syscall) {
+                    syscall_stop = false;
                 }
 
                 if (!is_stopped) {
                     pthread_create(&handle->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, handle);  // restart the waitpiding
                     if (data->type != TinyDbg_procman_request_type_stop) {
-                        ptrace(PTRACE_CONT, handle->pid, 0, 0);
+                        ptrace(syscall_stop ? PTRACE_SYSCALL : PTRACE_CONT, handle->pid, 0, 0);
                     } else {
                         is_stopped = true;
                     }
@@ -276,6 +293,13 @@ EventQueue_JoinHandle *TinyDbg_get_registers(TinyDbg *handle, struct user_regs_s
 EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_struct *take_from) {
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_regs, take_from);
 }
+EventQueue_JoinHandle *TinyDbg_stop_on_syscall(TinyDbg *handle) {
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_stop_on_syscall, NULL);
+}
+EventQueue_JoinHandle *TinyDbg_no_stop_on_syscall(TinyDbg *handle) {
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_no_stop_on_syscall, NULL);
+}
+
 EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov) {
     TinyDbg_procman_request_get_mem *x = malloc(sizeof(TinyDbg_procman_request_get_mem));
     x->local_iov = local_iov;
