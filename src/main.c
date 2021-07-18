@@ -15,7 +15,7 @@ int main(int argc, char *argv[], char *argp[]) {
 
     sleep(1);
     puts("Breakpoint: deployed!\n");
-    EventQueue_join(TinyDbg_set_breakpoint(handle, regs.rip, true));
+    EventQueue_join(TinyDbg_set_breakpoint(handle, regs.rip, false));
     
     EventQueue_Consumer *consumer = EventQueue_new_consumer(handle->eq_debugger_events);
     while (true) {

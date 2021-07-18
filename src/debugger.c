@@ -118,8 +118,16 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                         ptrace(PTRACE_SETREGS, handle->pid, 0, &regs);
                         // revert the first instruction
                         unsigned long mem = ptrace(PTRACE_PEEKTEXT, handle->pid, regs.rip, NULL);
+                        unsigned long original_mem = mem;
                         ((char *)(&mem))[0] = breakpoint.original;
                         ptrace(PTRACE_POKETEXT, handle->pid, regs.rip, mem);
+                        if (!breakpoint.is_once) {
+                            // single step, then return the breakpoint
+                            ptrace(PTRACE_SINGLESTEP, handle->pid, NULL, NULL);
+                            waitpid(handle->pid, NULL, 0);
+                            ptrace(PTRACE_POKETEXT, handle->pid, regs.rip, original_mem);
+                            // TODO what if the instruction that was there caused a different stop code?
+                        }
                     } else {
                         dbg_event->type = TinyDbg_event_type_stop;
                         dbg_event->content.stop_code = WSTOPSIG(wstatus);
