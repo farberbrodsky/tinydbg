@@ -100,4 +100,6 @@ EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_io
 EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
 EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t position, bool is_once);
 
+TinyDbg_Breakpoint *TinyDbg_list_breakpoints(TinyDbg *handle, size_t *breakpoints_len);
+
 #endif

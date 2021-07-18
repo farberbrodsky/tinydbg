@@ -166,6 +166,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     TinyDbg_procman_request_set_breakp *x = data->content;
                     TinyDbg_Breakpoint my_breakpoint;
                     my_breakpoint.is_once = x->is_once;
+                    my_breakpoint.position = x->position;
 
                     unsigned long data_at_position = ptrace(PTRACE_PEEKTEXT, handle->pid, x->position, NULL);
                     my_breakpoint.original = ((char *)(&data_at_position))[0];
@@ -287,12 +288,23 @@ EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_io
     x->remote_iov = remote_iov;
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_mem, x);
 }
-
 EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t position, bool is_once) {
     TinyDbg_procman_request_set_breakp *x = malloc(sizeof(TinyDbg_procman_request_set_breakp));
     x->position = position;
     x->is_once = is_once;
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_breakp, x);
+}
+
+TinyDbg_Breakpoint *TinyDbg_list_breakpoints(TinyDbg *handle, size_t *breakpoints_len) {
+    pthread_mutex_lock(&handle->breakpoint_lock);
+
+    *breakpoints_len = handle->breakpoints_len;
+    size_t total_size = (*breakpoints_len) * sizeof(TinyDbg_Breakpoint);
+    TinyDbg_Breakpoint *clone = malloc(total_size);
+    memcpy(clone, handle->breakpoints, total_size);
+
+    pthread_mutex_unlock(&handle->breakpoint_lock);
+    return clone;
 }
 
 void TinyDbg_Event_free(TinyDbg_Event *event) {
