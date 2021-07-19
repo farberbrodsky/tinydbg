@@ -1,5 +1,4 @@
 #include "debugger.h"
-#include <arpa/inet.h>
 
 static void unlock_mutex(pthread_mutex_t *mutex) {
     pthread_mutex_unlock(mutex);
@@ -34,6 +33,7 @@ struct process_manager_thread_args {
     const char *filename;
     char *const *argv;
     char *const *envp;
+    unsigned int flags;
 };
 
 static void process_manager_thread(struct process_manager_thread_args *args) {
@@ -47,6 +47,9 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
     if (child_pid == 0) {
         // am child
         ptrace(PTRACE_TRACEME, 0, 0, 0);
+        if (args->flags & TINYDBG_FLAG_NO_ASLR) {
+            personality(ADDR_NO_RANDOMIZE);
+        }
         execve(filename, argv, envp);
     } else {
         bool is_stopped = true;
@@ -224,7 +227,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
     }
 }
 
-TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const envp[]) {
+TinyDbg *TinyDbg_start_advanced(const char *filename, char *const argv[], char *const envp[], unsigned int flags) {
     // create the object
     TinyDbg *result = calloc(1, sizeof(TinyDbg));
 
@@ -242,6 +245,7 @@ TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const env
     procman_args->filename = filename;
     procman_args->argv = argv;
     procman_args->envp = envp;
+    procman_args->flags = flags;
 
     pthread_create(&result->process_manager_thread, NULL, (void * (*)(void *))&process_manager_thread, procman_args);
     // send empty join to process_manager_thread, it will return only once it's done ptracing
@@ -251,6 +255,10 @@ TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const env
     pthread_create(&result->waiter_thread, NULL, (void * (*)(void *))&waitpid_thread, result);
 
     return result;
+}
+
+TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const envp[]) {
+    return TinyDbg_start_advanced(filename, argv, envp, 0);
 }
 
 void TinyDbg_free(TinyDbg *handle) {

@@ -5,7 +5,7 @@
 
 int main(int argc, char *argv[], char *argp[]) {
     printf("Test main!\n");
-    TinyDbg *handle = TinyDbg_start("test", argv, argp);
+    TinyDbg *handle = TinyDbg_start_advanced("test", argv, argp, TINYDBG_FLAG_NO_ASLR);
     EventQueue_join(TinyDbg_stop_on_syscall(handle));
     EventQueue_join(TinyDbg_continue(handle));
 

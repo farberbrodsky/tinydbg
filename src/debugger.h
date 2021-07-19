@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <sys/user.h>
 #include <sys/ptrace.h>
+#include <sys/personality.h>
 #include "../event_queue_c/event_queue.h"
 
 // Breakpoints are stored in pointers.
@@ -42,6 +43,9 @@ typedef struct {
 
 // Start the debugger
 TinyDbg *TinyDbg_start(const char *filename, char *const argv[], char *const envp[]);
+
+#define TINYDBG_FLAG_NO_ASLR (0b1)
+TinyDbg *TinyDbg_start_advanced(const char *filename, char *const argv[], char *const envp[], unsigned int flags);
 
 // Free a TinyDbg instance once it's done - delete the mutex, stop the thread, etc.
 void TinyDbg_free(TinyDbg *handle);
