@@ -108,6 +108,18 @@ EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_io
 EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
 EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t position, bool is_once);
 
+typedef struct {
+    unsigned long begin;
+    unsigned long end;
+    unsigned long page_offset;
+    bool perm_read;
+    bool perm_write;
+    bool perm_execute;
+    bool perm_mayshare;
+    char *pathname;
+} TinyDbg_memory_map;
+TinyDbg_memory_map *TinyDbg_get_memory_maps(TinyDbg *handle, size_t *len);
+
 EventQueue_JoinHandle *TinyDbg_stop_on_syscall(TinyDbg *handle);
 EventQueue_JoinHandle *TinyDbg_no_stop_on_syscall(TinyDbg *handle);
 

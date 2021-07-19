@@ -24,6 +24,16 @@ int main(int argc, char *argv[], char *argp[]) {
         printf("breakpoint #%d, position: %lu\n", i, breakpoints[i].position);
     }
     free(breakpoints);
+
+    size_t memory_maps_len;
+    TinyDbg_memory_map *memory_maps = TinyDbg_get_memory_maps(handle, &memory_maps_len);
+    for (int i = 0; i < memory_maps_len; i++) {
+        if (memory_maps[i].pathname[0] != '\0') {
+            printf("Pathname %s at %lx\n", memory_maps[i].pathname, memory_maps[i].begin);
+            free(memory_maps[i].pathname);
+        }
+    }
+    free(memory_maps);
     
     EventQueue_Consumer *consumer = EventQueue_new_consumer(handle->eq_debugger_events);
     while (true) {

@@ -339,6 +339,38 @@ TinyDbg_Breakpoint *TinyDbg_list_breakpoints(TinyDbg *handle, size_t *breakpoint
     return clone;
 }
 
+TinyDbg_memory_map *TinyDbg_get_memory_maps(TinyDbg *handle, size_t *maps_len) {
+    TinyDbg_memory_map *mem_maps;
+    *maps_len = 0;
+
+    char path_str[22];
+    sprintf(path_str, "/proc/%d/maps", handle->pid);
+    FILE *fp = fopen(path_str, "r");
+
+    // read line by line
+    char *line = NULL;
+    ssize_t line_len;
+    size_t _ = 0;
+    while ((line_len = getline(&line, &_, fp)) != -1) {
+        TinyDbg_memory_map map;
+        map.pathname = malloc(line_len);  // it can't be any bigger
+        char perm[5];
+        char dev[5];
+        long inode;
+        sscanf(line, "%lx-%lx%c%c%c%c%c %lx %5s %ld %s", &map.begin, &map.end, &perm[0], &perm[1], &perm[2], &perm[3], &perm[4], &map.page_offset, dev, &inode, map.pathname);
+        map.perm_read = (perm[1] == 'r');
+        map.perm_write = (perm[2] == 'w');
+        map.perm_execute = (perm[3] == 'x');
+        map.perm_mayshare = (perm[4] == 'p');
+
+        mem_maps = realloc(mem_maps, (++(*maps_len)) * sizeof(TinyDbg_memory_map));
+        mem_maps[*maps_len - 1] = map;
+    }
+
+    fclose(fp);
+    return mem_maps;
+}
+
 void TinyDbg_Event_free(TinyDbg_Event *event) {
     free(event);
 }
