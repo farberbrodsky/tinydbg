@@ -154,6 +154,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     || data->type == TinyDbg_procman_request_type_get_mem
                     || data->type == TinyDbg_procman_request_type_set_mem
                     || data->type == TinyDbg_procman_request_type_set_breakp
+                    || data->type == TinyDbg_procman_request_type_unset_breakp
                     || data->type == TinyDbg_procman_request_type_singlestep
                     || data->type == TinyDbg_procman_request_type_stop_on_syscall
                     || data->type == TinyDbg_procman_request_type_no_stop_on_syscall) {  // stuff which needs stopping first
@@ -178,7 +179,7 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
                     process_vm_writev(handle->pid, &x->local_iov, 1, &x->remote_iov, 1, 0);
                     free(x);
                 } else if (data->type == TinyDbg_procman_request_type_set_breakp) {
-                    // set a breakpoint!
+                    // set a breakpoint
                     TinyDbg_procman_request_set_breakp *x = data->content;
                     TinyDbg_Breakpoint my_breakpoint;
                     my_breakpoint.is_once = x->is_once;
@@ -201,6 +202,31 @@ static void process_manager_thread(struct process_manager_thread_args *args) {
 
                     pthread_mutex_unlock(&handle->breakpoint_lock);
                     free(x);
+                } else if (data->type == TinyDbg_procman_request_type_unset_breakp) {
+                    pthread_mutex_lock(&handle->breakpoint_lock);
+                    // search for the breakpoint at this position
+                    size_t breakpoint_index = 0;
+                    for (; breakpoint_index < handle->breakpoints_len; breakpoint_index++) {
+                        if (handle->breakpoint_positions[breakpoint_index] == (uintptr_t)data->content) {
+                            break;
+                        }
+                    }
+                    TinyDbg_Breakpoint deleted_breakpoint = handle->breakpoints[breakpoint_index];
+
+                    // remove from the list
+                    for (int j = breakpoint_index; j < handle->breakpoints_len - 1; j++) {
+                        handle->breakpoint_positions[j] = handle->breakpoint_positions[j + 1];
+                    }
+                    for (int j = breakpoint_index; j < handle->breakpoints_len - 1; j++) {
+                        handle->breakpoints[j] = handle->breakpoints[j + 1];
+                    }
+                    handle->breakpoints_len--;
+                    pthread_mutex_unlock(&handle->breakpoint_lock);
+
+                    // remove the \xcc
+                    unsigned long data_at_position = ptrace(PTRACE_PEEKTEXT, handle->pid, deleted_breakpoint.position, NULL);
+                    ((char *)(&data_at_position))[0] = deleted_breakpoint.original;
+                    ptrace(PTRACE_POKETEXT, handle->pid, deleted_breakpoint.position, data_at_position);
                 } else if (data->type == TinyDbg_procman_request_type_singlestep) {
                     ptrace(PTRACE_SINGLESTEP, handle->pid, NULL, NULL);
                     waitpid(handle->pid, NULL, 0);
@@ -325,6 +351,9 @@ EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t positio
     x->position = position;
     x->is_once = is_once;
     return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_set_breakp, x);
+}
+EventQueue_JoinHandle *TinyDbg_unset_breakpoint(TinyDbg *handle, uintptr_t position) {
+    return TinyDbg_send_procman_request(handle, TinyDbg_procman_request_type_unset_breakp, (void *)position);
 }
 
 TinyDbg_Breakpoint *TinyDbg_list_breakpoints(TinyDbg *handle, size_t *breakpoints_len) {

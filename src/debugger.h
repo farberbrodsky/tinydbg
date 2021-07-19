@@ -60,6 +60,7 @@ typedef enum {
     TinyDbg_procman_request_type_get_mem,
     TinyDbg_procman_request_type_set_mem,
     TinyDbg_procman_request_type_set_breakp,
+    TinyDbg_procman_request_type_unset_breakp,
     TinyDbg_procman_request_type_stop_on_syscall,
     TinyDbg_procman_request_type_no_stop_on_syscall,
     TinyDbg_INTERNAL_procman_request_type_waitpid,
@@ -107,6 +108,7 @@ EventQueue_JoinHandle *TinyDbg_set_registers(TinyDbg *handle, struct user_regs_s
 EventQueue_JoinHandle *TinyDbg_get_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
 EventQueue_JoinHandle *TinyDbg_set_memory(TinyDbg *handle, struct iovec local_iov, struct iovec remote_iov);
 EventQueue_JoinHandle *TinyDbg_set_breakpoint(TinyDbg *handle, uintptr_t position, bool is_once);
+EventQueue_JoinHandle *TinyDbg_unset_breakpoint(TinyDbg *handle, uintptr_t position);
 
 typedef struct {
     unsigned long begin;
@@ -119,6 +121,12 @@ typedef struct {
     char *pathname;
 } TinyDbg_memory_map;
 TinyDbg_memory_map *TinyDbg_get_memory_maps(TinyDbg *handle, size_t *len);
+// Set a memory breakpoint, which breaks when memory is accessed
+// The way it works is it uses mprotect to set the page the address is in to be no-read or no-write or no-execute,
+// and then whenever that happens we get a pagefault. When there's a pagefault, we check if it's in a memory breakpoint,
+// in which case we enable the permission for a second, single-step, and disable it again, and send an event only if it's in range.
+// Not implemented yet.
+EventQueue_JoinHandle *TinyDbg_memory_breakpoint(TinyDbg *handle, TinyDbg_memory_map mem_map);
 
 EventQueue_JoinHandle *TinyDbg_stop_on_syscall(TinyDbg *handle);
 EventQueue_JoinHandle *TinyDbg_no_stop_on_syscall(TinyDbg *handle);
